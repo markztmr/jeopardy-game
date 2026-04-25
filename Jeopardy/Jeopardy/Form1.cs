@@ -43,17 +43,10 @@ namespace Jeopardy
 
         private void btnStart_Click(object sender, EventArgs e)
         {
-            List<string> playerNames = new List<string>();
-            for (int i = 0; i < (int)numPlayers.Value; i++)
-            {
-                TextBox txt = panelPlayerNames.Controls.Find($"txtPlayer{i + 1}", true).FirstOrDefault() as TextBox;
-                string name = txt != null ? txt.Text.Trim() : $"Player {i + 1}";
-                if (string.IsNullOrEmpty(name)) name = $"Player {i + 1}";
-                playerNames.Add(name);
-            }
-
-            GameForm gameForm = new GameForm(playerNames);
-            gameForm.Show();
+            // Open the new Lobby form
+            GameState gameState = new GameState();
+            LobbyForm lobbyForm = new LobbyForm(gameState);
+            lobbyForm.Show();
             this.Hide();
         }
     }

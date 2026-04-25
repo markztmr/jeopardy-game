@@ -59,14 +59,14 @@
             // 
             // panelPlayerNames
             // 
-            panelPlayerNames.Location = new Point(272, 173);
+            panelPlayerNames.Location = new Point(271, 160);
             panelPlayerNames.Name = "panelPlayerNames";
-            panelPlayerNames.Size = new Size(250, 125);
+            panelPlayerNames.Size = new Size(250, 197);
             panelPlayerNames.TabIndex = 2;
             // 
             // btnStart
             // 
-            btnStart.Location = new Point(351, 335);
+            btnStart.Location = new Point(351, 363);
             btnStart.Name = "btnStart";
             btnStart.Size = new Size(94, 29);
             btnStart.TabIndex = 3;
@@ -76,7 +76,7 @@
             // 
             // btnRefreshPlayers
             // 
-            btnRefreshPlayers.Location = new Point(351, 370);
+            btnRefreshPlayers.Location = new Point(351, 398);
             btnRefreshPlayers.Name = "btnRefreshPlayers";
             btnRefreshPlayers.Size = new Size(94, 29);
             btnRefreshPlayers.TabIndex = 4;

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
@@ -9,419 +9,656 @@ namespace Jeopardy
     public partial class GameForm : Form
     {
         // Game data
+        private GameState gameState;
         private List<string> playerNames;
         private int currentPlayerIndex;
         private List<int> playerScores;
+        private List<bool> playerBuzzed;
 
         // Board data
+        private QuestionSet questionSet;
         private List<string> categories;
-        private Clue[,] board;        // 5 rows (values) x 5 columns (categories)
-        private int selectedRow = -1, selectedCol = -1;
+        private Dictionary<string, List<ClueData>> board;
+        private string selectedCategory = "";
+        private int selectedValue = 0;
 
         // UI controls
-        private FlowLayoutPanel scorePanel;
-        private Label lblTurn;
-        private TableLayoutPanel boardPanel;
-        private Label lblClue;
+        private FlowLayoutPanel scoreboardPanel;
+        private Label lblClueCategory;
+        private Label lblClueValue;
+        private Label lblClueText;
         private TextBox txtAnswer;
         private Button btnSubmit;
         private Label lblTimer;
-        private System.Windows.Forms.Timer responseTimer;
+        private Label lblBuzzer;
+        private Panel boardPanel;
+        private System.Windows.Forms.Timer gameTimer;
         private int timeLeft = 5;
 
-        public GameForm(List<string> names)
+        // Game state
+        private bool isAnsweringPhase = false;
+        private bool buzzerLocked = true;
+
+        public GameForm(GameState state, QuestionSet questions)
         {
-            playerNames = names;
+            gameState = state;
+            questionSet = questions;
+            playerNames = gameState.PlayerNames;
             currentPlayerIndex = 0;
             playerScores = new List<int>(new int[playerNames.Count]);
-            InitializeComponent();
+            playerBuzzed = new List<bool>(new bool[playerNames.Count]);
+            categories = questionSet.GetCategoryNames();
+            board = questionSet.Categories;
 
-            // Disable the default designer view
             this.WindowState = FormWindowState.Maximized;
-            this.Text = "Jeopardy! Game";
-            this.Size = new Size(1200, 900);
-            this.StartPosition = FormStartPosition.CenterScreen;
-            this.MinimumSize = new Size(800, 700);
+            this.Text = "Jeopardy!";
+            this.BackColor = Color.FromArgb(0, 40, 100);
+            this.ForeColor = Color.White;
+            this.Font = new Font("Arial", 11);
+            this.DoubleBuffered = true;
+
+            InitializeComponent();
+            gameTimer = new System.Windows.Forms.Timer();
+            gameTimer.Interval = 1000;
+            gameTimer.Tick += GameTimer_Tick;
+
             BuildUI();
-            InitializeGameData();
             BuildBoardUI();
-            UpdateScoreDisplay();
-            UpdateTurnLabel();
+            UpdateScoreboard();
         }
 
         private void BuildUI()
         {
-            // Score panel
-            scorePanel = new FlowLayoutPanel
+            // Main layout - vertical stacking
+            TableLayoutPanel mainLayout = new TableLayoutPanel
             {
-                Dock = DockStyle.Top,
-                Height = 45,
-                Padding = new Padding(10),
-                BackColor = Color.Navy
+                ColumnCount = 1,
+                RowCount = 4,
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(0, 40, 100),
+                Margin = new Padding(0),
+                Padding = new Padding(0)
             };
-            this.Controls.Add(scorePanel);
 
-            // Current player label
-            lblTurn = new Label
+            // Row styles: Fixed heights for top/bottom, fill for middle
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));    // Scoreboard
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 200));   // Clue display
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));    // Board
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 120));   // Answer input
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+            this.Controls.Add(mainLayout);
+
+            // ===== SCOREBOARD PANEL =====
+            scoreboardPanel = new FlowLayoutPanel
             {
-                Dock = DockStyle.Top,
-                Height = 30,
-                TextAlign = ContentAlignment.MiddleCenter,
+                AutoScroll = false,
+                WrapContents = true,
+                BackColor = Color.FromArgb(0, 0, 80),
+                Padding = new Padding(10),
+                Margin = new Padding(0),
+                Dock = DockStyle.Fill
+            };
+            mainLayout.Controls.Add(scoreboardPanel, 0, 0);
+
+            // ===== CLUE DISPLAY PANEL =====
+            Panel clueDisplayPanel = new Panel
+            {
+                BackColor = Color.FromArgb(0, 40, 100),
+                Padding = new Padding(15),
+                Margin = new Padding(0),
+                Dock = DockStyle.Fill
+            };
+            mainLayout.Controls.Add(clueDisplayPanel, 0, 1);
+
+            // Inner layout for clue display
+            TableLayoutPanel clueLayout = new TableLayoutPanel
+            {
+                ColumnCount = 2,
+                RowCount = 3,
+                Dock = DockStyle.Fill,
+                Padding = new Padding(0),
+                Margin = new Padding(0)
+            };
+            clueLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            clueLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            clueLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+            clueLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            clueLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+
+            clueDisplayPanel.Controls.Add(clueLayout);
+
+            // Category label
+            lblClueCategory = new Label
+            {
+                Text = "CATEGORY",
+                Font = new Font("Arial", 14, FontStyle.Bold),
+                ForeColor = Color.Cyan,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(5)
+            };
+            clueLayout.Controls.Add(lblClueCategory, 0, 0);
+
+            // Value label
+            lblClueValue = new Label
+            {
+                Text = "$0",
+                Font = new Font("Arial", 14, FontStyle.Bold),
+                ForeColor = Color.Yellow,
+                TextAlign = ContentAlignment.MiddleRight,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(5)
+            };
+            clueLayout.Controls.Add(lblClueValue, 1, 0);
+
+            // Clue text
+            lblClueText = new Label
+            {
+                Text = "Select a clue from the board",
                 Font = new Font("Arial", 14, FontStyle.Bold),
                 ForeColor = Color.White,
-                BackColor = Color.DarkBlue,
-                Text = ""
-            };
-            this.Controls.Add(lblTurn);
-
-            // Clue display
-            lblClue = new Label
-            {
-                Dock = DockStyle.Top,
-                Height = 55,
-                Font = new Font("Arial", 12, FontStyle.Bold),
-                BackColor = Color.LightYellow,
                 TextAlign = ContentAlignment.MiddleCenter,
-                Text = "Select a clue to begin"
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(0, 0, 80),
+                AutoSize = false,
+                Margin = new Padding(5),
+                BorderStyle = BorderStyle.FixedSingle
             };
-            this.Controls.Add(lblClue);
+            clueLayout.Controls.Add(lblClueText, 0, 1);
+            clueLayout.SetColumnSpan(lblClueText, 2);
 
-            // Answer panel
-            Panel answerPanel = new Panel { Dock = DockStyle.Top, Height = 38 };
-            Label lblAnswerInstruction = new Label
+            // Timer and Buzzer status
+            Panel timerBuzzerPanel = new Panel
             {
-                Text = "Your response (must be in question form):",
-                Location = new Point(10, 10),
-                AutoSize = true,
-                Font = new Font("Arial", 10)
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0),
+                Padding = new Padding(5)
             };
-            txtAnswer = new TextBox
-            {
-                Location = new Point(280, 6),
-                Width = 300,
-                Enabled = false
-            };
-            btnSubmit = new Button
-            {
-                Text = "Submit",
-                Location = new Point(590, 5),
-                Width = 100,
-                Enabled = false
-            };
-            btnSubmit.Click += BtnSubmit_Click;
+            clueLayout.Controls.Add(timerBuzzerPanel, 0, 2);
+            clueLayout.SetColumnSpan(timerBuzzerPanel, 2);
+
             lblTimer = new Label
             {
                 Text = "",
-                Location = new Point(710, 10),
-                AutoSize = true,
-                Font = new Font("Arial", 10, FontStyle.Bold),
-                ForeColor = Color.Red
+                Font = new Font("Arial", 12, FontStyle.Bold),
+                ForeColor = Color.Red,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Dock = DockStyle.Left,
+                AutoSize = true
             };
-            answerPanel.Controls.Add(lblAnswerInstruction);
-            answerPanel.Controls.Add(txtAnswer);
-            answerPanel.Controls.Add(btnSubmit);
-            answerPanel.Controls.Add(lblTimer);
-            this.Controls.Add(answerPanel);
+            timerBuzzerPanel.Controls.Add(lblTimer);
 
-            // Timer
-            responseTimer = new System.Windows.Forms.Timer();
-            responseTimer.Interval = 1000;
-            responseTimer.Tick += ResponseTimer_Tick;
-
-            // Board panel
-            boardPanel = new TableLayoutPanel
+            lblBuzzer = new Label
             {
+                Text = "",
+                Font = new Font("Arial", 11, FontStyle.Bold),
+                ForeColor = Color.Lime,
+                TextAlign = ContentAlignment.MiddleRight,
+                Dock = DockStyle.Right,
+                AutoSize = true,
+                Margin = new Padding(10, 0, 0, 0)
+            };
+            timerBuzzerPanel.Controls.Add(lblBuzzer);
+
+            // ===== BOARD PANEL =====
+            boardPanel = new Panel
+            {
+                BackColor = Color.FromArgb(0, 40, 100),
+                Padding = new Padding(15),
+                Margin = new Padding(0),
                 Dock = DockStyle.Fill,
-                Padding = new Padding(10),
                 AutoScroll = true
             };
-            this.Controls.Add(boardPanel);
-        }
+            mainLayout.Controls.Add(boardPanel, 0, 2);
 
-        private void InitializeGameData()
-        {
-            categories = new List<string> { "Science", "History", "Movies", "Sports", "Geography" };
-            int[] values = { 200, 400, 600, 800, 1000 };
-            board = new Clue[5, 5];
-
-  
-            string[,] sampleQuestions = new string[5, 5]
+            // ===== ANSWER INPUT PANEL =====
+            Panel answerPanel = new Panel
             {
-                { "This gas makes up most of Earth's atmosphere.", "Who was the first President of the United States?", "In 'The Shawshank Redemption', this actor played Andy Dufresne.", "This country won the FIFA World Cup in 2018.", "The longest river in Africa." },
-                { "H2O is the chemical formula for this.", "This ancient wonder was located at Alexandria.", "Which movie featured a character named 'Forrest Gump'?", "Michael Jordan wore this number for most of his career.", "The capital of Japan." },
-                { "The force that pulls objects toward Earth.", "The year World War II ended.", "Who played Jack Dawson in 'Titanic'?", "The sport known as 'the beautiful game'.", "The driest desert on Earth (excluding poles)." },
-                { "The planet known as the 'Red Planet'.", "The name of the ship Charles Darwin sailed on.", "Which film won the Oscar for Best Picture in 1994?", "The athlete with the most Olympic gold medals.", "The smallest country in the world." },
-                { "The unit of electrical resistance.", "The name of the first satellite in space.", "Who directed 'Jurassic Park'?", "The team that won the first Super Bowl.", "The largest ocean on Earth." }
+                BackColor = Color.FromArgb(0, 0, 80),
+                Padding = new Padding(15),
+                Margin = new Padding(0),
+                Dock = DockStyle.Fill
             };
+            mainLayout.Controls.Add(answerPanel, 0, 3);
 
-            string[,] sampleAnswers = new string[5, 5]
+            // Answer input layout
+            TableLayoutPanel answerLayout = new TableLayoutPanel
             {
-                { "what is nitrogen", "who is george washington", "who is tim robbins", "what is france", "what is the nile" },
-                { "what is water", "what is the lighthouse of alexandria", "what is forrest gump", "what is 23", "what is tokyo" },
-                { "what is gravity", "what is 1945", "who is leonardo dicaprio", "what is soccer", "what is the atacama" },
-                { "what is mars", "what is the beagle", "what is forrest gump", "who is michael phelps", "what is vatican city" },
-                { "what is ohm", "what is sputnik", "who is steven spielberg", "what is green bay packers", "what is pacific" }
+                ColumnCount = 4,
+                RowCount = 2,
+                Dock = DockStyle.Fill,
+                Padding = new Padding(0),
+                Margin = new Padding(0)
             };
+            answerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 200));
+            answerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            answerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
+            answerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
+            answerLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));
+            answerLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-            for (int row = 0; row < 5; row++)
+            answerPanel.Controls.Add(answerLayout);
+
+            Label lblAnswerLabel = new Label
             {
-                for (int col = 0; col < 5; col++)
+                Text = "Your Answer:",
+                Font = new Font("Arial", 10, FontStyle.Bold),
+                ForeColor = Color.Cyan,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Dock = DockStyle.Fill
+            };
+            answerLayout.Controls.Add(lblAnswerLabel, 0, 0);
+
+            txtAnswer = new TextBox
+            {
+                BackColor = Color.FromArgb(50, 50, 100),
+                ForeColor = Color.White,
+                Font = new Font("Arial", 11),
+                Enabled = false,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(5, 0, 5, 0)
+            };
+            answerLayout.Controls.Add(txtAnswer, 1, 0);
+
+            btnSubmit = new Button
+            {
+                Text = "SUBMIT",
+                Font = new Font("Arial", 10, FontStyle.Bold),
+                BackColor = Color.Green,
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Enabled = false,
+                Cursor = Cursors.Hand,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(2)
+            };
+            btnSubmit.Click += BtnSubmit_Click;
+            answerLayout.Controls.Add(btnSubmit, 2, 0);
+
+            Button btnBuzz = new Button
+            {
+                Text = "BUZZ IN",
+                Font = new Font("Arial", 10, FontStyle.Bold),
+                BackColor = Color.FromArgb(255, 50, 50),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Enabled = false,
+                Cursor = Cursors.Hand,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(2),
+                Visible = (gameState.GameMode == GameMode.Buzzer),
+                Tag = "BuzzButton"
+            };
+            btnBuzz.Click += (s, e) => HandleBuzz();
+            answerLayout.Controls.Add(btnBuzz, 3, 0);
+
+            // Register keyboard shortcut
+            this.KeyPreview = true;
+            this.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.Space && gameState.GameMode == GameMode.Buzzer && !buzzerLocked && !isAnsweringPhase)
                 {
-                    board[row, col] = new Clue
-                    {
-                        Value = values[row],
-                        Question = sampleQuestions[row, col],
-                        Answer = sampleAnswers[row, col],
-                        IsAnswered = false
-                    };
+                    HandleBuzz();
+                    e.Handled = true;
                 }
-            }
+            };
         }
 
         private void BuildBoardUI()
         {
             boardPanel.Controls.Clear();
-            boardPanel.ColumnCount = 5;
-            for (int i = 0; i < 5; i++)
-                boardPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20f));
 
-            // Row 0: category headers
-            boardPanel.RowCount = 6;
-            boardPanel.RowStyles.Clear();
-            boardPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 60f)); // header row
+            if (categories.Count == 0)
+            {
+                MessageBox.Show("No categories available!", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            // Create main board layout
+            TableLayoutPanel boardLayout = new TableLayoutPanel
+            {
+                ColumnCount = categories.Count,
+                RowCount = 6,
+                Dock = DockStyle.Fill,
+                AutoSize = false,
+                Padding = new Padding(0),
+                Margin = new Padding(0),
+                BackColor = Color.FromArgb(0, 40, 100)
+            };
+
+            // Set equal column widths - distribute evenly
+            float colWidth = (float)1.0 / categories.Count * 100;
+            for (int i = 0; i < categories.Count; i++)
+            {
+                boardLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, (float)colWidth));
+            }
+
+            // Header row
+            boardLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 55));
+
+            // Value rows
             for (int i = 0; i < 5; i++)
-                boardPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 20f));
+            {
+                boardLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
+            }
 
             // Add category headers
-            for (int col = 0; col < 5; col++)
+            for (int col = 0; col < categories.Count; col++)
             {
                 Label header = new Label
                 {
-                    Text = categories[col],
+                    Text = categories[col].ToUpper(),
                     TextAlign = ContentAlignment.MiddleCenter,
                     Dock = DockStyle.Fill,
                     Font = new Font("Arial", 12, FontStyle.Bold),
-                    BackColor = Color.LightBlue,
-                    ForeColor = Color.Navy
+                    BackColor = Color.FromArgb(0, 0, 80),
+                    ForeColor = Color.Cyan,
+                    BorderStyle = BorderStyle.Fixed3D,
+                    Margin = new Padding(2),
+                    Padding = new Padding(5),
+                    AutoSize = false
                 };
-                boardPanel.Controls.Add(header, col, 0);
+                boardLayout.Controls.Add(header, col, 0);
             }
 
-            // Add clue buttons
+            // Add clue buttons (values: 200, 400, 600, 800, 1000)
+            int[] values = { 200, 400, 600, 800, 1000 };
             for (int row = 0; row < 5; row++)
             {
-                for (int col = 0; col < 5; col++)
+                for (int col = 0; col < categories.Count; col++)
                 {
+                    string categoryName = categories[col];
+                    int value = values[row];
+
                     Button btn = new Button
                     {
-                        Text = $"${board[row, col].Value}",
+                        Text = $"${value}",
                         Dock = DockStyle.Fill,
-                        Tag = new Point(row, col),
-                        BackColor = Color.Gold,
-                        Font = new Font("Arial", 10, FontStyle.Bold),
-                        FlatStyle = FlatStyle.Flat
+                        BackColor = Color.FromArgb(0, 0, 200),
+                        ForeColor = Color.Yellow,
+                        Font = new Font("Arial", 14, FontStyle.Bold),
+                        FlatStyle = FlatStyle.Flat,
+                        Cursor = Cursors.Hand,
+                        Margin = new Padding(2),
+                        Padding = new Padding(0),
+                        Tag = $"{categoryName}:{value}",
+                        AutoSize = false
                     };
+                    btn.FlatAppearance.BorderSize = 2;
+                    btn.FlatAppearance.BorderColor = Color.Cyan;
                     btn.Click += ClueButton_Click;
-                    boardPanel.Controls.Add(btn, col, row + 1);
+                    boardLayout.Controls.Add(btn, col, row + 1);
                 }
             }
+
+            boardPanel.Controls.Add(boardLayout);
         }
 
         private void ClueButton_Click(object sender, EventArgs e)
         {
             Button btn = sender as Button;
-            Point pos = (Point)btn.Tag;
-            int row = pos.X, col = pos.Y;
+            if (btn == null) return;
 
-            if (board[row, col].IsAnswered)
+            string[] parts = btn.Tag.ToString().Split(':');
+            selectedCategory = parts[0];
+            selectedValue = int.Parse(parts[1]);
+
+            // Find the clue
+            ClueData clue = board[selectedCategory].FirstOrDefault(c => c.Value == selectedValue);
+            if (clue == null || clue.IsAnswered)
             {
                 MessageBox.Show("This clue has already been answered!", "Already Used", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
-            selectedRow = row;
-            selectedCol = col;
+            // Display clue
+            lblClueCategory.Text = selectedCategory.ToUpper();
+            lblClueValue.Text = $"${selectedValue}";
+            lblClueText.Text = clue.Question;
 
-            // Display the clue
-            lblClue.Text = board[row, col].Question;
+            buzzerLocked = false;
 
-            // Enable answer entry
-            txtAnswer.Clear();
-            txtAnswer.Enabled = true;
-            btnSubmit.Enabled = true;
-            txtAnswer.Focus();
-
-            // Start timer
-            timeLeft = 30;
-            lblTimer.Text = $"Time: {timeLeft}s";
-            responseTimer.Start();
-
-            // Disable all clue buttons during answering
-            foreach (Control ctrl in boardPanel.Controls)
+            if (gameState.GameMode == GameMode.Buzzer)
             {
-                if (ctrl is Button b && b != btnSubmit)
-                    b.Enabled = false;
+                lblBuzzer.Text = "Press SPACE or BUZZ IN";
+                lblBuzzer.ForeColor = Color.Lime;
+                lblTimer.Text = "";
             }
+            else if (gameState.GameMode == GameMode.Timer)
+            {
+                isAnsweringPhase = true;
+                timeLeft = gameState.TimerDuration;
+                lblTimer.Text = $"Time: {timeLeft}s";
+                lblTimer.ForeColor = Color.Red;
+                lblBuzzer.Text = "Everyone answers!";
+                lblBuzzer.ForeColor = Color.Yellow;
+                gameTimer.Start();
+
+                txtAnswer.Enabled = true;
+                txtAnswer.Focus();
+                btnSubmit.Enabled = true;
+            }
+
+            DisableAllButtons();
+        }
+
+        private void HandleBuzz()
+        {
+            if (buzzerLocked) return;
+            if (string.IsNullOrEmpty(selectedCategory) || selectedValue == 0) return;
+
+            buzzerLocked = true;
+            isAnsweringPhase = true;
+            gameTimer.Stop();
+
+            lblBuzzer.Text = $"{playerNames[currentPlayerIndex]} buzzed in!";
+            lblBuzzer.ForeColor = Color.Lime;
+            lblTimer.Text = "Answering...";
+
+            txtAnswer.Enabled = true;
+            txtAnswer.Focus();
+            btnSubmit.Enabled = true;
+
+            timeLeft = 10;
+            gameTimer.Start();
         }
 
         private void BtnSubmit_Click(object sender, EventArgs e)
         {
-            responseTimer.Stop();
-            string playerAnswer = txtAnswer.Text.Trim().ToLower();
-            string correctAnswer = board[selectedRow, selectedCol].Answer.ToLower();
+            gameTimer.Stop();
 
+            ClueData clue = board[selectedCategory].FirstOrDefault(c => c.Value == selectedValue);
+            if (clue == null) return;
+
+            string playerAnswer = txtAnswer.Text.Trim().ToLower();
+            string correctAnswer = clue.Answer.ToLower();
             bool isCorrect = (playerAnswer == correctAnswer);
 
             if (isCorrect)
             {
-                int points = board[selectedRow, selectedCol].Value;
-                playerScores[currentPlayerIndex] += points;
-                MessageBox.Show($"Correct! +${points}", "Correct!", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                board[selectedRow, selectedCol].IsAnswered = true;
-                DisableBoardButton(selectedRow, selectedCol);
+                playerScores[currentPlayerIndex] += selectedValue;
+                MessageBox.Show($"✓ CORRECT!\n+${selectedValue}", "Correct!", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                clue.IsAnswered = true;
+                MarkButtonAsUsed(selectedCategory, selectedValue);
             }
             else
             {
-                int points = board[selectedRow, selectedCol].Value;
-                playerScores[currentPlayerIndex] -= points;
-                MessageBox.Show($"Wrong! Correct answer: \"{correctAnswer}\"\n-${points}", "Incorrect", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                // Clue remains available (IsAnswered stays false)
+                if (gameState.GameMode == GameMode.Buzzer)
+                {
+                    playerScores[currentPlayerIndex] -= selectedValue;
+                    MessageBox.Show($"✗ WRONG!\nCorrect answer: \"{correctAnswer}\"\n-${selectedValue}", "Incorrect", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    currentPlayerIndex = (currentPlayerIndex + 1) % playerNames.Count;
+                }
+                else
+                {
+                    playerScores[currentPlayerIndex] -= selectedValue;
+                    MessageBox.Show($"✗ WRONG!\nCorrect answer: \"{correctAnswer}\"\n-${selectedValue}", "Incorrect", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    clue.IsAnswered = true;
+                    MarkButtonAsUsed(selectedCategory, selectedValue);
+                }
             }
 
-            // Update scores UI
-            UpdateScoreDisplay();
-
-            // Move to next player
-            currentPlayerIndex = (currentPlayerIndex + 1) % playerNames.Count;
-            UpdateTurnLabel();
-
-            // Clear answer UI
-            txtAnswer.Enabled = false;
-            btnSubmit.Enabled = false;
-            txtAnswer.Clear();
-            lblClue.Text = "Select a clue";
-            lblTimer.Text = "";
-
-            // Re-enable remaining clue buttons
-            EnableRemainingClueButtons();
-
-            // Check for end of game
+            UpdateScoreboard();
+            ResetAnswerUI();
+            EnableAllButtons();
             CheckGameEnd();
         }
 
-        private void ResponseTimer_Tick(object sender, EventArgs e)
+        private void GameTimer_Tick(object sender, EventArgs e)
         {
             timeLeft--;
             lblTimer.Text = $"Time: {timeLeft}s";
+
             if (timeLeft <= 0)
             {
-                responseTimer.Stop();
-                MessageBox.Show("Time's up! No answer given.", "Time Expired", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                // Treat as wrong answer (no penalty in this version, but you can deduct if desired)
-                txtAnswer.Enabled = false;
-                btnSubmit.Enabled = false;
-                lblClue.Text = "Select a clue";
-                lblTimer.Text = "";
+                gameTimer.Stop();
 
-                // Move to next player
-                currentPlayerIndex = (currentPlayerIndex + 1) % playerNames.Count;
-                UpdateTurnLabel();
-
-                // Re-enable clue buttons
-                EnableRemainingClueButtons();
-            }
-        }
-
-        private void DisableBoardButton(int row, int col)
-        {
-            foreach (Control ctrl in boardPanel.Controls)
-            {
-                if (ctrl is Button btn && btn.Tag is Point p && p.X == row && p.Y == col)
+                if (gameState.GameMode == GameMode.Buzzer)
                 {
-                    btn.Enabled = false;
-                    btn.BackColor = Color.Gray;
-                    btn.Text = "Used";
-                    break;
+                    MessageBox.Show("Time expired! No one buzzed in.", "Time Expired", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    ResetAnswerUI();
+                    EnableAllButtons();
+                }
+                else
+                {
+                    if (!string.IsNullOrEmpty(txtAnswer.Text))
+                    {
+                        BtnSubmit_Click(null, null);
+                    }
+                    else
+                    {
+                        MessageBox.Show("Time's up!", "Time Expired", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        ClueData clue = board[selectedCategory].FirstOrDefault(c => c.Value == selectedValue);
+                        if (clue != null) clue.IsAnswered = true;
+                        MarkButtonAsUsed(selectedCategory, selectedValue);
+                        UpdateScoreboard();
+                        ResetAnswerUI();
+                        EnableAllButtons();
+                        CheckGameEnd();
+                    }
                 }
             }
         }
 
-        private void EnableRemainingClueButtons()
+        private void ResetAnswerUI()
+        {
+            txtAnswer.Enabled = false;
+            btnSubmit.Enabled = false;
+            txtAnswer.Clear();
+            lblClueText.Text = "Select a clue from the board";
+            lblClueCategory.Text = "CATEGORY";
+            lblClueValue.Text = "$0";
+            lblTimer.Text = "";
+            lblBuzzer.Text = "";
+            isAnsweringPhase = false;
+            buzzerLocked = true;
+        }
+
+        private void DisableAllButtons()
         {
             foreach (Control ctrl in boardPanel.Controls)
             {
-                if (ctrl is Button btn && btn.Tag is Point p)
+                if (ctrl is TableLayoutPanel tlp)
                 {
-                    if (!board[p.X, p.Y].IsAnswered)
-                        btn.Enabled = true;
+                    foreach (Control c in tlp.Controls)
+                    {
+                        if (c is Button btn) btn.Enabled = false;
+                    }
                 }
             }
         }
 
-        private void UpdateScoreDisplay()
+        private void EnableAllButtons()
         {
-            scorePanel.Controls.Clear();
+            foreach (Control ctrl in boardPanel.Controls)
+            {
+                if (ctrl is TableLayoutPanel tlp)
+                {
+                    foreach (Control c in tlp.Controls)
+                    {
+                        if (c is Button btn && btn.Tag is string tag)
+                        {
+                            string[] parts = tag.Split(':');
+                            if (parts.Length == 2)
+                            {
+                                string cat = parts[0];
+                                int val = int.Parse(parts[1]);
+                                ClueData clue = board[cat].FirstOrDefault(x => x.Value == val);
+                                btn.Enabled = clue != null && !clue.IsAnswered;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private void MarkButtonAsUsed(string category, int value)
+        {
+            foreach (Control ctrl in boardPanel.Controls)
+            {
+                if (ctrl is TableLayoutPanel tlp)
+                {
+                    foreach (Control c in tlp.Controls)
+                    {
+                        if (c is Button btn && btn.Tag is string tag && tag == $"{category}:{value}")
+                        {
+                            btn.Enabled = false;
+                            btn.BackColor = Color.FromArgb(50, 50, 50);
+                            btn.ForeColor = Color.Gray;
+                            btn.Text = "USED";
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        private void UpdateScoreboard()
+        {
+            scoreboardPanel.Controls.Clear();
             for (int i = 0; i < playerNames.Count; i++)
             {
+                Panel playerPanel = new Panel
+                {
+                    BackColor = (i == currentPlayerIndex) ? Color.FromArgb(0, 100, 200) : Color.FromArgb(0, 0, 80),
+                    Height = 50,
+                    Margin = new Padding(5),
+                    BorderStyle = BorderStyle.FixedSingle,
+                    AutoSize = false,
+                    Width = 180
+                };
+
                 Label lbl = new Label
                 {
-                    Text = $"{playerNames[i]}: ${playerScores[i]}",
-                    Font = new Font("Arial", 12, FontStyle.Bold),
+                    Text = $"{playerNames[i]}\n${playerScores[i]}",
+                    Font = new Font("Arial", 11, FontStyle.Bold),
                     ForeColor = Color.White,
-                    AutoSize = true,
-                    Margin = new Padding(20, 5, 20, 5)
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    Dock = DockStyle.Fill
                 };
-                scorePanel.Controls.Add(lbl);
+                playerPanel.Controls.Add(lbl);
+                scoreboardPanel.Controls.Add(playerPanel);
             }
-        }
-
-        private void UpdateTurnLabel()
-        {
-            lblTurn.Text = $"Current Player: {playerNames[currentPlayerIndex]}";
         }
 
         private void CheckGameEnd()
         {
-            bool allAnswered = true;
-            for (int row = 0; row < 5; row++)
+            foreach (var category in categories)
             {
-                for (int col = 0; col < 5; col++)
-                {
-                    if (!board[row, col].IsAnswered)
-                    {
-                        allAnswered = false;
-                        break;
-                    }
-                }
+                if (board[category].Any(c => !c.IsAnswered))
+                    return;
             }
 
-            if (allAnswered)
-            {
-                // Find winner
-                int maxScore = playerScores.Max();
-                List<string> winners = new List<string>();
-                for (int i = 0; i < playerNames.Count; i++)
-                {
-                    if (playerScores[i] == maxScore)
-                        winners.Add(playerNames[i]);
-                }
+            // All clues answered
+            int maxScore = playerScores.Max();
+            var winners = playerNames.Where((n, i) => playerScores[i] == maxScore).ToList();
 
-                string winnerMsg = (winners.Count == 1) ? $"Winner: {winners[0]}!" : $"It's a tie between: {string.Join(", ", winners)}";
-                MessageBox.Show($"Game Over!\nFinal scores:\n{string.Join("\n", playerNames.Select((n, i) => $"{n}: ${playerScores[i]}"))}\n\n{winnerMsg}",
-                                "Game Finished", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            string winnerMsg = winners.Count == 1 ? $"🏆 WINNER: {winners[0]}! 🏆" : $"🏆 TIE: {string.Join(", ", winners)}! 🏆";
+            string finalScores = string.Join("\n", playerNames.Select((n, i) => $"{n}: ${playerScores[i]}"));
+            MessageBox.Show($"GAME OVER!\n\nFinal Scores:\n{finalScores}\n\n{winnerMsg}", "Game Finished", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
-                // Close the game form or return to start screen
-                this.Close();
-            }
+            this.Close();
         }
-    }
-
-    // Helper class for a clue
-    public class Clue
-    {
-        public string Question { get; set; }
-        public string Answer { get; set; }
-        public int Value { get; set; }
-        public bool IsAnswered { get; set; }
     }
 }
